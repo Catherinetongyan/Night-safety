@@ -9,8 +9,8 @@ import pickle
 print("Downloading graph...")
 G = ox.graph_from_place("Bristol, United Kingdom", network_type="walk")
 
-cctv_df = pd.read_csv(r"C:\Users\Oliver\Documents\Council_cctv_cameras_longlat.csv")
-lights_df = pd.read_csv(r"C:\Users\Oliver\Documents\Council_streetlights_longlat.csv")
+cctv_df = pd.read_csv(r"Council_cctv_cameras_longlat.csv")
+lights_df = pd.read_csv(r"Council_streetlights_longlat.csv")
 
 cctv_gdf = gpd.GeoDataFrame(cctv_df, geometry=gpd.points_from_xy(cctv_df.longitude, cctv_df.latitude), crs="EPSG:4326").to_crs(epsg=3857)
 lights_gdf = gpd.GeoDataFrame(lights_df, geometry=gpd.points_from_xy(lights_df.longitude, lights_df.latitude), crs="EPSG:4326").to_crs(epsg=3857)
@@ -32,15 +32,14 @@ for i, (u, v, k, data) in enumerate(G.edges(keys=True, data=True)):
     x2, y2 = transformer.transform(G.nodes[v]['x'], G.nodes[v]['y'])
     midpoint = Point((x1 + x2) / 2, (y1 + y2) / 2)
     safety = safety_score(midpoint)
-    length = data.get("length", 1)
-    data["safety_weight"] = max(1, length - (safety * 5))
+    data["safety_density"]  = safety / data.get("length", 1.0) 
 
 print("Saving graph...")
-with open(r"C:\Users\Oliver\Documents\bristol_safety_graph.pkl", "wb") as f:
+with open(r"bristol_safety_graph.pkl", "wb") as f:
     pickle.dump(G, f)
 
 # Save GDFs for plotting later
-cctv_gdf.to_crs(epsg=4326).to_file(r"C:\Users\Oliver\Documents\cctv.gpkg", driver="GPKG")
-lights_gdf.to_crs(epsg=4326).to_file(r"C:\Users\Oliver\Documents\lights.gpkg", driver="GPKG")
+cctv_gdf.to_crs(epsg=4326).to_file(r"cctv.gpkg", driver="GPKG")
+lights_gdf.to_crs(epsg=4326).to_file(r"lights.gpkg", driver="GPKG")
 
-print("Done! Run route.py whenever you want a route.")
+print("Done! Run safe_route.py whenever you want a route.")
