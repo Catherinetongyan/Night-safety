@@ -1,0 +1,71 @@
+# ============================================================
+#  Bristol Safe Walking Router — 配置文件
+#  修改此文件来调整路径、起终点和算法参数，无需改动 Python 代码
+# ============================================================
+
+# ------------------------------------------------------------
+# 数据文件路径
+# ------------------------------------------------------------
+paths:
+  graph:          "bristol_safety_graph.pkl"
+  crime_csv:      "bristol_2023-01_to_2025-12.csv"
+  cctv:           "cctv.gpkg"
+  lights:         "lights.gpkg"
+  weighted_graph: "bristol_weighted_graph.pkl"
+
+# ------------------------------------------------------------
+# 起终点坐标（纬度, 经度）
+# ------------------------------------------------------------
+route:
+  start:
+    name: "Wills Memorial Building"
+    lat:   51.4576
+    lon:  -2.6053
+  end:
+    name: "Thekla"
+    lat:   51.4493
+    lon:  -2.5980
+  walking_speed_kmh: 5.0
+
+# ------------------------------------------------------------
+# KDE 参数
+# ------------------------------------------------------------
+kde:
+  bandwidth_metres: 150   # diffusion radius in metres (≈100m, 150m, 300m)
+  kernel: "gaussian"
+
+  # Performance: only keep records with severity >= threshold
+  # 0.0 uses all data (slower); 1.5 reduces to ~95k records (faster)
+  min_severity: 0.0
+
+# ------------------------------------------------------------
+# 安全权重公式系数
+#   safety_weight = length
+#                 * (1 + ALPHA * crime_score)   犯罪惩罚
+#                 * (1 - BETA  * light_score)   路灯奖励
+#                 * (1 - GAMMA * cctv_score)    CCTV 奖励
+# ------------------------------------------------------------
+weights:
+  k1: 0.5   # distance importance
+  k2: 0.3   # crime avoidance importance  
+  k3: 0.2   # safety infrastructure importance
+  # k1 + k2 + k3 must equal 1.0
+
+# ------------------------------------------------------------
+# 犯罪类型严重度权重
+# ------------------------------------------------------------
+severity:
+  "Violence and sexual offences": 3.0
+  "Robbery":                       2.5
+  "Possession of weapons":         2.0
+  "Public order":                  1.5
+  "Criminal damage and arson":     1.2
+  "Drugs":                         1.0
+  "Theft from the person":         1.0
+  "Anti-social behaviour":         0.8
+  "Other theft":                   0.6
+  "Burglary":                      0.5
+  "Other crime":                   0.5
+  "Vehicle crime":                 0.4
+  "Bicycle theft":                 0.3
+  "Shoplifting":                   0.2
