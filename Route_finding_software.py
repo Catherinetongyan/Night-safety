@@ -8,11 +8,11 @@ import pickle
 # -------------------
 # Load pre-built graph
 # -------------------
-with open(r"C:\Users\Oliver\Documents\bristol_safety_graph.pkl", "rb") as f:
+with open(r"bristol_safety_graph.pkl", "rb") as f:
     G = pickle.load(f)
 
-cctv_gdf = gpd.read_file(r"C:\Users\Oliver\Documents\cctv.gpkg")
-lights_gdf = gpd.read_file(r"C:\Users\Oliver\Documents\lights.gpkg")
+cctv_gdf = gpd.read_file(r"cctv.gpkg")
+lights_gdf = gpd.read_file(r"lights.gpkg")
 
 # -------------------
 # Set your start and end points here
