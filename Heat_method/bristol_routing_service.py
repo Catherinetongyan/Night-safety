@@ -54,6 +54,12 @@ RISK_CONFIGS = {
         "penalties"   : {},
         "weight_attr" : "length",
     },
+    "user_levels": {
+        "network_type": "walk",
+        "description" : "users decided risk tolerance",
+        "penalties"   : {},
+        "weight_attr" : "length",
+    },
 }
 
 
@@ -793,7 +799,7 @@ def _interactive_cli():
     print("=" * 60)
 
     #risk = input("\nRisk level (low / medium / high) [low]: ").strip() or "low"
-    risk = "low"
+    risk = "high"
     service = RoutingService(risk_level=risk)
 
     print("\nKnown landmarks:")
@@ -804,13 +810,13 @@ def _interactive_cli():
         print("\n" + "-" * 40)
         print("Enter origin (name or lat,lon) — or 'quit':")
         #origin_input = input("  Origin > ").strip().lower()
-        origin_input = "51.45598, -h2.60469"
+        origin_input = "51.4576, -2.6053"
         if origin_input in ("quit", "q", "exit"):
             break
 
         print("Enter destination (name or lat,lon):")
         #dest_input = input("  Dest   > ").strip().lower()
-        dest_input = "51.44906, -2.59425"
+        dest_input = "51.4493, -2.5980"
 
         def parse_location(s):
             if s in BRISTOL_LANDMARKS:
