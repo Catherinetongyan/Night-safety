@@ -1,10 +1,10 @@
 # ============================================================
-#  Bristol Safe Walking Router — 配置文件
-#  修改此文件来调整路径、起终点和算法参数，无需改动 Python 代码
+#  Bristol Safe Walking Router — Configuration File
+#  Modify this file to adjust paths, start/end points, and algorithm parameters without changing the Python code
 # ============================================================
 
 # ------------------------------------------------------------
-# 数据文件路径
+# Paths to data files and outputs
 # ------------------------------------------------------------
 paths:
   graph:          "bristol_safety_graph.pkl"
@@ -14,7 +14,7 @@ paths:
   weighted_graph: "bristol_weighted_graph.pkl"
 
 # ------------------------------------------------------------
-# 起终点坐标（纬度, 经度）
+# Start and end coordinates (latitude, longitude)
 # ------------------------------------------------------------
 route:
   start:
@@ -22,13 +22,13 @@ route:
     lat:   51.4576
     lon:  -2.6053
   end:
-    name: "Thekla"
+    name: "Temple Meads Station"
     lat:   51.4493
-    lon:  -2.5980
+    lon:  -2.5815
   walking_speed_kmh: 4.5
 
 # ------------------------------------------------------------
-# KDE 参数
+# KDE paramters
 # ------------------------------------------------------------
 kde:
   bandwidth_metres: 150   # diffusion radius in metres (≈100m, 150m, 300m)
@@ -41,15 +41,17 @@ kde:
   crime_half_life_days: 180   # half-life for temporal decay in days
 
 # ------------------------------------------------------------
-# 安全权重公式系数
+# Safety weighting formula coefficients
 #   w(e) = length(e) * exp( alpha * crime_risk - beta * safety_density )
 # ------------------------------------------------------------
 weights:
-  alpha: 3.0   # crime penalty strength
-  beta:  2.0   # safety reward strength
+  alpha: 1.3 # crime penalty strength
+  beta:  1.1   # safety reward strength
+  cctv_weight: 3
+  light_weight: 1
 
 # ------------------------------------------------------------
-# 犯罪类型严重度权重
+# Weighting for the severity of the crime types
 # ------------------------------------------------------------
 severity:
   "Violence and sexual offences": 3.0
