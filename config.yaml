@@ -1,70 +1,60 @@
-# ============================================================
-#  Bristol Safe Walking Router — Configuration File
-#  Modify this file to adjust paths, start/end points, and algorithm parameters without changing the Python code
-# ============================================================
-
-# ------------------------------------------------------------
-# Paths to data files and outputs
-# ------------------------------------------------------------
 paths:
-  graph:          "bristol_safety_graph.pkl"
-  crime_csv:      "Input/bristol_2023-01_to_2025-12.csv"
-  cctv:           "cctv.gpkg"
-  lights:         "lights.gpkg"
+  crime_csv: "Input/bristol_2023-01_to_2025-12.csv"
+  cctv_csv: "Input/Council_cctv_cameras_longlat.csv"
+  lights_csv: "Input/Council_streetlights_longlat.csv"
+  cctv: "cctv.gpkg"
+  lights: "lights.gpkg"
   weighted_graph: "bristol_weighted_graph.pkl"
 
-# ------------------------------------------------------------
-# Start and end coordinates (latitude, longitude)
-# ------------------------------------------------------------
+graph:
+  place: "Bristol, United Kingdom"
+  network_type: "walk"
+
 route:
   start:
     name: "Wills Memorial Building"
-    lat:   51.4576
-    lon:  -2.6053
+    lat: 51.4576
+    lon: -2.6053
   end:
     name: "Temple Meads Station"
-    lat:   51.4493
-    lon:  -2.5815
+    lat: 51.4493
+    lon: -2.5815
   walking_speed_kmh: 4.5
 
-# ------------------------------------------------------------
-# KDE paramters
-# ------------------------------------------------------------
 kde:
-  bandwidth_metres: 150   # diffusion radius in metres (≈100m, 150m, 300m)
+  bandwidth_metres: 150
   kernel: "gaussian"
-
-  # Performance: only keep records with severity >= threshold
-  # 0.0 uses all data (slower); 1.5 reduces to ~95k records (faster)
   min_severity: 0.0
+  crime_half_life_days: 180
 
-  crime_half_life_days: 180   # half-life for temporal decay in days
-
-# ------------------------------------------------------------
-# Safety weighting formula coefficients
-#   w(e) = length(e) * exp( alpha * crime_risk - beta * safety_density )
-# ------------------------------------------------------------
 weights:
-  alpha: 1.3 # crime penalty strength
-  beta:  1.1   # safety reward strength
+  alpha: 1.3
+  beta: 1.1
   cctv_weight: 3
   light_weight: 1
 
-# ------------------------------------------------------------
-# Weighting for the severity of the crime types
-# ------------------------------------------------------------
+linear_cost:
+  w_distance: 0.4
+  w_crime: 0.3
+  w_safety: 0.3
+  require_lit: false
+  epsilon: 1.0e-6
+
+heat_method:
+  t_factor: 1.0
+
 severity:
   "Violence and sexual offences": 3.0
-  "Robbery":                       2.5
-  "Possession of weapons":         2.0
-  "Public order":                  1.5
-  "Criminal damage and arson":     1.2
-  "Drugs":                         1.0
-  "Theft from the person":         1.0
-  "Anti-social behaviour":         0.8
-  "Other theft":                   0.6
-  "Burglary":                      0.5
-  "Other crime":                   0.5
-  "Vehicle crime":                 0.4
-  "Bicycle theft":                 0.3
-  "Shoplifting":                   0.2
+  "Robbery": 2.5
+  "Possession of weapons": 2.0
+  "Public order": 1.5
+  "Criminal damage and arson": 1.2
+  "Drugs": 1.0
+  "Theft from the person": 1.0
+  "Anti-social behaviour": 0.8
+  "Other theft": 0.6
+  "Burglary": 0.5
+  "Other crime": 0.5
+  "Vehicle crime": 0.4
+  "Bicycle theft": 0.3
+  "Shoplifting": 0.2
