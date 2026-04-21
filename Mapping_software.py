@@ -291,8 +291,8 @@ def main():
     G = download_graph()
 
     cctv_gdf, lights_gdf = load_infrastructure(
-        "Council_cctv_cameras_longlat.csv",
-        "Council_streetlights_longlat.csv",
+        "Input/Council_cctv_cameras_longlat.csv",
+        "Input/Council_streetlights_longlat.csv",
     )
 
     score_safety(G, cctv_gdf, lights_gdf,cfg)

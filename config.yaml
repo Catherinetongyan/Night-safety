@@ -8,7 +8,7 @@
 # ------------------------------------------------------------
 paths:
   graph:          "bristol_safety_graph.pkl"
-  crime_csv:      "bristol_2023-01_to_2025-12.csv"
+  crime_csv:      "Input/bristol_2023-01_to_2025-12.csv"
   cctv:           "cctv.gpkg"
   lights:         "lights.gpkg"
   weighted_graph: "bristol_weighted_graph.pkl"
