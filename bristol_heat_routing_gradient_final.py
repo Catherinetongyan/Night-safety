@@ -48,10 +48,10 @@ from sklearn.preprocessing import MinMaxScaler
 # FILE PATHS  (relative to this script)
 # ─────────────────────────────────────────────────────────────────────────────
 
-GRAPH_PKL  = "bristol_heat_graph.pkl"
-CRIME_CSV  = "bristol_2023-01_to_2025-12.csv"
-CCTV_CSV   = "Council_cctv_cameras_longlat.csv"
-LIGHTS_CSV = "Council_streetlights_longlat.csv"
+GRAPH_PKL  = "Graph/bristol_heat_graph.pkl"
+CRIME_CSV  = "Input/bristol_2023-01_to_2025-12.csv"
+CCTV_CSV   = "Input/Council_cctv_cameras_longlat.csv"
+LIGHTS_CSV = "Input/Council_streetlights_longlat.csv"
 
 BUFFER_M      = 40     # metres radius for CCTV / light edge scoring
 KDE_BANDWIDTH = 150    # metres for crime KDE bandwidth
