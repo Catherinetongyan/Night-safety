@@ -226,140 +226,53 @@ def recover_path(
     dest_node,
     distances: dict,
     profile: HeatProfile,
-    delta: float = 0.05,
-    mu: float = 0.15,
-    max_steps: int | None = None,
+    lambda_phi: float = 5.0,
 ) -> list:
     """
-    Recover a path from destination to origin using a softened descent rule.
+    Recover a route using phi-guided shortest path instead of greedy descent.
 
-    Improvements over strict greedy descent:
-    1. Allow small uphill moves: phi(nb) <= phi(current) + delta
-    2. Rank candidates by phi(nb) + mu * edge_cost(current, nb)
-    3. If no 1-hop candidate exists, try a 2-hop local escape
-    4. Fall back to Dijkstra on exponential full cost if still stuck
+    The recovery edge weight is:
+        recover_cost(u, v) = heat_cost(u, v) + lambda_phi * max(phi(v) - phi(u), 0)
+
+    This encourages movement toward lower-phi regions while still accounting
+    for the original exponential heat cost on each edge.
 
     Parameters
     ----------
-    delta : float
-        Allowed uphill tolerance in phi-space.
-    mu : float
-        Weight on local edge cost when ranking neighbour candidates.
+    lambda_phi : float
+        Penalty strength for moving uphill in phi.
+        Larger values force the route to follow the phi field more strictly.
     """
     t0 = time.time()
 
     if origin_node == dest_node:
-        print(f"  Soft gradient recovery ({time.time() - t0:.2f}s)")
+        print(f"  Phi-guided recovery ({time.time() - t0:.2f}s)")
         return [origin_node]
 
-    if max_steps is None:
-        max_steps = len(G.nodes)
+    def recover_weight(u, v, edge_data):
+        phi_u = distances.get(u, float("inf"))
+        phi_v = distances.get(v, float("inf"))
 
-    path = [dest_node]
-    visited = {dest_node}
-    current = dest_node
+        if not np.isfinite(phi_u) or not np.isfinite(phi_v):
+            return float("inf")
 
-    def get_edge_data_any_direction(u, v):
-        """Return one edge-data dict for (u, v) or (v, u), preferring key=0 if present."""
-        if G.has_edge(u, v):
-            edge_dict = G[u][v]
-            if 0 in edge_dict:
-                return edge_dict[0]
-            return next(iter(edge_dict.values()))
-        if G.has_edge(v, u):
-            edge_dict = G[v][u]
-            if 0 in edge_dict:
-                return edge_dict[0]
-            return next(iter(edge_dict.values()))
-        return None
+        base_cost = heat_cost(edge_data, profile)
+        uphill_penalty = max(phi_v - phi_u, 0.0)
 
-    for _ in range(max_steps):
-        if current == origin_node:
-            break
+        return base_cost + lambda_phi * uphill_penalty
 
-        phi_here = distances.get(current, float("inf"))
-        neighbours = list(G.successors(current)) + list(G.predecessors(current))
-        neighbours = list(dict.fromkeys(neighbours))  # remove duplicates while preserving order
+    try:
+        route = nx.shortest_path(
+            G,
+            origin_node,
+            dest_node,
+            weight=recover_weight,
+        )
+        print(f"  Phi-guided recovery ({time.time() - t0:.2f}s)")
+        return route
 
-        # 1-hop softened descent candidates
-        candidates = []
-        for nb in neighbours:
-            if nb in visited:
-                continue
-
-            phi_nb = distances.get(nb, float("inf"))
-            if not np.isfinite(phi_nb):
-                continue
-
-            # Allow a small uphill move in phi
-            if phi_nb <= phi_here + delta:
-                edge_data = get_edge_data_any_direction(current, nb)
-                if edge_data is None:
-                    continue
-                c = heat_cost(edge_data, profile)
-                score = phi_nb + mu * c
-                candidates.append((score, phi_nb, c, nb))
-
-        if candidates:
-            candidates.sort(key=lambda x: (x[0], x[1], x[2]))
-            _, _, _, best_node = candidates[0]
-            visited.add(best_node)
-            path.append(best_node)
-            current = best_node
-            continue
-
-        # 2-hop local escape:
-        # if no 1-hop move is available, allow a move to an intermediate node
-        # provided that a lower-phi region can be reached within two hops
-        escape_candidates = []
-        for mid in neighbours:
-            if mid in visited:
-                continue
-
-            edge_data_1 = get_edge_data_any_direction(current, mid)
-            if edge_data_1 is None:
-                continue
-            c1 = heat_cost(edge_data_1, profile)
-
-            mid_neighbours = list(G.successors(mid)) + list(G.predecessors(mid))
-            mid_neighbours = list(dict.fromkeys(mid_neighbours))
-
-            best_second_phi = float("inf")
-            found_lower_second = False
-
-            for nb2 in mid_neighbours:
-                if nb2 == current or nb2 in visited:
-                    continue
-
-                phi_nb2 = distances.get(nb2, float("inf"))
-                if not np.isfinite(phi_nb2):
-                    continue
-
-                # Treat mid as a valid escape node if a strictly lower-phi
-                # node can be reached in two hops
-                if phi_nb2 < phi_here - 1e-9:
-                    best_second_phi = min(best_second_phi, phi_nb2)
-                    found_lower_second = True
-
-            if found_lower_second:
-                # Rank escape nodes by the best 2-hop phi, then by first-step cost
-                score = best_second_phi + mu * c1
-                phi_mid = distances.get(mid, float("inf"))
-                escape_candidates.append((score, best_second_phi, phi_mid, c1, mid))
-
-        if escape_candidates:
-            escape_candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
-            _, _, _, _, best_mid = escape_candidates[0]
-            visited.add(best_mid)
-            path.append(best_mid)
-            current = best_mid
-            continue
-
-        print(f"  Soft recovery stuck at node {current} (phi={phi_here:.4f})")
-        break
-
-    if current != origin_node:
-        print("  Falling back to Dijkstra on exponential full cost...")
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        print("  Phi-guided recovery failed; falling back to heat-cost Dijkstra...")
         try:
             route = nx.shortest_path(
                 G,
@@ -367,17 +280,11 @@ def recover_path(
                 dest_node,
                 weight=lambda u, v, d: heat_cost(d, profile),
             )
-            print(f"  Soft gradient recovery + fallback ({time.time() - t0:.2f}s)")
+            print(f"  Phi-guided recovery + fallback ({time.time() - t0:.2f}s)")
             return route
         except (nx.NetworkXNoPath, nx.NodeNotFound):
-            print(f"  Soft gradient recovery failed ({time.time() - t0:.2f}s)")
+            print(f"  Phi-guided recovery failed completely ({time.time() - t0:.2f}s)")
             return []
-
-    path.reverse()
-    print(f"  Soft gradient recovery ({time.time() - t0:.2f}s)")
-    return path
-
-
 # ────────────────────────────────────────────────────────────
 # 4. Route stats and safety analysis
 # ────────────────────────────────────────────────────────────
@@ -685,8 +592,7 @@ def main():
     print("\n[6/6] Heat method")
     distances = run_heat_method(G, start_node, profile, cfg)
     print(f"  Phi at destination: {distances.get(goal_node, float('inf')):.4f}")
-    route_c = recover_path(G, start_node, goal_node, distances, profile, delta=0.05,
-    mu=0.15)
+    route_c = recover_path(G, start_node, goal_node, distances, profile, lambda_phi=5.0)
     if not route_c:
         print("  No heat route found; using shortest-path fallback for plotting")
         route_c = route_a
