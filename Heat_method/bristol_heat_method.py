@@ -25,7 +25,7 @@ from scipy.sparse.linalg import spsolve
 # CONFIGURATION — change these as needed
 # ─────────────────────────────────────────────
 
-RISK_LEVEL   = "low"          # 'low' | 'medium' | 'high'
+RISK_LEVEL   = "high"          # 'low' | 'medium' | 'high'
 SOURCE_LAT   = 51.4545        # Bristol city centre (lat)
 SOURCE_LON   = -2.5879        # Bristol city centre (lon)
 T_FACTOR     = 1.0            # Heat timestep scale (larger = smoother)
