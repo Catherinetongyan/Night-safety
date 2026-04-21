@@ -5,7 +5,7 @@ Compares three routes on the same weighted graph built by Mapping_software.py:
 
 A — Shortest path          (distance only)
 B — A* full                (distance + crime + safety, exponential cost)
-C — Heat full              (distance + crime + safety, linear cost + heat method)
+C — Heat full              (distance + crime + safety, exponential cost + heat method)
 
 Usage
 -----
@@ -48,22 +48,21 @@ def resolve_path(base_dir: Path, raw_path: str) -> Path:
 
 
 @dataclass
-class UserProfile:
-    w_distance: float
-    w_crime: float
-    w_safety: float
+class HeatProfile:
+    alpha: float
+    beta: float
     require_lit: bool = False
     epsilon: float = 1.0e-6
 
 
-def load_linear_profile(cfg: dict) -> UserProfile:
-    linear_cfg = cfg.get("linear_cost", {})
-    return UserProfile(
-        w_distance=float(linear_cfg.get("w_distance", 0.4)),
-        w_crime=float(linear_cfg.get("w_crime", 0.3)),
-        w_safety=float(linear_cfg.get("w_safety", 0.3)),
-        require_lit=bool(linear_cfg.get("require_lit", False)),
-        epsilon=float(linear_cfg.get("epsilon", 1.0e-6)),
+def load_heat_profile(cfg: dict) -> HeatProfile:
+    weights_cfg = cfg.get("weights", {})
+    heat_cfg = cfg.get("heat_method", {})
+    return HeatProfile(
+        alpha=float(heat_cfg.get("alpha", weights_cfg.get("alpha", 1.3))),
+        beta=float(heat_cfg.get("beta", weights_cfg.get("beta", 1.1))),
+        require_lit=bool(heat_cfg.get("require_lit", False)),
+        epsilon=float(heat_cfg.get("epsilon", 1.0e-6)),
     )
 
 
@@ -126,8 +125,8 @@ def compute_full_astar_weights(G: nx.MultiDiGraph, cfg: dict) -> None:
     print(f"  A* full weights ready ({time.time() - t0:.2f}s)")
 
 
-def linear_cost(edge_data: dict, profile: UserProfile) -> float:
-    """Linear cost used by the heat method."""
+def heat_cost(edge_data: dict, profile: HeatProfile) -> float:
+    """Heat-method edge cost, aligned with A* full exponential cost."""
     if profile.require_lit and edge_data.get("light_count", 0) <= 0:
         return float("inf")
 
@@ -135,11 +134,7 @@ def linear_cost(edge_data: dict, profile: UserProfile) -> float:
     nc = float(edge_data.get("norm_crime", 0.0))
     ns = float(edge_data.get("norm_safety", 0.0))
 
-    cost = (
-        profile.w_distance * length
-        + profile.w_crime * nc * length
-        + profile.w_safety * (1.0 - ns) * length
-    )
+    cost = length * np.exp(profile.alpha * nc - profile.beta * ns)
     return max(cost, profile.epsilon)
 
 
@@ -147,14 +142,14 @@ def linear_cost(edge_data: dict, profile: UserProfile) -> float:
 # 3. Heat method
 # ────────────────────────────────────────────────────────────
 
-def build_laplacian(G: nx.MultiDiGraph, profile: UserProfile):
+def build_laplacian(G: nx.MultiDiGraph, profile: HeatProfile):
     t0 = time.time()
     nodes = list(G.nodes())
     node_idx = {node: i for i, node in enumerate(nodes)}
     rows, cols, vals = [], [], []
 
     for u, v, data in G.edges(data=True):
-        c = linear_cost(data, profile)
+        c = heat_cost(data, profile)
         if c == float("inf"):
             continue
         i, j = node_idx[u], node_idx[v]
@@ -168,7 +163,7 @@ def build_laplacian(G: nx.MultiDiGraph, profile: UserProfile):
     return L, nodes, node_idx
 
 
-def run_heat_method(G: nx.MultiDiGraph, origin_node, profile: UserProfile, cfg: dict) -> dict:
+def run_heat_method(G: nx.MultiDiGraph, origin_node, profile: HeatProfile, cfg: dict) -> dict:
     heat_cfg = cfg.get("heat_method", {})
     t_factor = float(heat_cfg.get("t_factor", 1.0))
 
@@ -180,7 +175,7 @@ def run_heat_method(G: nx.MultiDiGraph, origin_node, profile: UserProfile, cfg: 
     t0 = time.time()
     costs = []
     for _, _, data in G.edges(data=True):
-        c = linear_cost(data, profile)
+        c = heat_cost(data, profile)
         if c < float("inf"):
             costs.append(c)
     mean_c = float(np.mean(costs)) if costs else 1.0
@@ -197,7 +192,7 @@ def run_heat_method(G: nx.MultiDiGraph, origin_node, profile: UserProfile, cfg: 
     t0 = time.time()
     div = np.zeros(n)
     for eu, ev, data in G.edges(data=True):
-        c = linear_cost(data, profile)
+        c = heat_cost(data, profile)
         if c == float("inf"):
             continue
         i, j = node_idx[eu], node_idx[ev]
@@ -225,55 +220,161 @@ def run_heat_method(G: nx.MultiDiGraph, origin_node, profile: UserProfile, cfg: 
     return {nodes[i]: phi[i] for i in range(n)}
 
 
-def recover_path(G: nx.MultiDiGraph, origin_node, dest_node, distances: dict, profile: UserProfile) -> list:
+def recover_path(
+    G: nx.MultiDiGraph,
+    origin_node,
+    dest_node,
+    distances: dict,
+    profile: HeatProfile,
+    delta: float = 0.05,
+    mu: float = 0.15,
+    max_steps: int | None = None,
+) -> list:
+    """
+    Recover a path from destination to origin using a softened descent rule.
+
+    Improvements over strict greedy descent:
+    1. Allow small uphill moves: phi(nb) <= phi(current) + delta
+    2. Rank candidates by phi(nb) + mu * edge_cost(current, nb)
+    3. If no 1-hop candidate exists, try a 2-hop local escape
+    4. Fall back to Dijkstra on exponential full cost if still stuck
+
+    Parameters
+    ----------
+    delta : float
+        Allowed uphill tolerance in phi-space.
+    mu : float
+        Weight on local edge cost when ranking neighbour candidates.
+    """
     t0 = time.time()
+
     if origin_node == dest_node:
-        print(f"  Gradient descent recovery ({time.time() - t0:.2f}s)")
+        print(f"  Soft gradient recovery ({time.time() - t0:.2f}s)")
         return [origin_node]
+
+    if max_steps is None:
+        max_steps = len(G.nodes)
 
     path = [dest_node]
     visited = {dest_node}
     current = dest_node
 
-    for _ in range(len(G.nodes)):
+    def get_edge_data_any_direction(u, v):
+        """Return one edge-data dict for (u, v) or (v, u), preferring key=0 if present."""
+        if G.has_edge(u, v):
+            edge_dict = G[u][v]
+            if 0 in edge_dict:
+                return edge_dict[0]
+            return next(iter(edge_dict.values()))
+        if G.has_edge(v, u):
+            edge_dict = G[v][u]
+            if 0 in edge_dict:
+                return edge_dict[0]
+            return next(iter(edge_dict.values()))
+        return None
+
+    for _ in range(max_steps):
         if current == origin_node:
             break
+
         phi_here = distances.get(current, float("inf"))
         neighbours = list(G.successors(current)) + list(G.predecessors(current))
+        neighbours = list(dict.fromkeys(neighbours))  # remove duplicates while preserving order
 
-        best_node, best_phi = None, phi_here
+        # 1-hop softened descent candidates
+        candidates = []
         for nb in neighbours:
             if nb in visited:
                 continue
+
             phi_nb = distances.get(nb, float("inf"))
-            if phi_nb < best_phi:
-                best_phi, best_node = phi_nb, nb
+            if not np.isfinite(phi_nb):
+                continue
 
-        if best_node is None:
-            print(f"  Gradient descent stuck at node {current} (phi={phi_here:.4f})")
-            break
+            # Allow a small uphill move in phi
+            if phi_nb <= phi_here + delta:
+                edge_data = get_edge_data_any_direction(current, nb)
+                if edge_data is None:
+                    continue
+                c = heat_cost(edge_data, profile)
+                score = phi_nb + mu * c
+                candidates.append((score, phi_nb, c, nb))
 
-        visited.add(best_node)
-        path.append(best_node)
-        current = best_node
+        if candidates:
+            candidates.sort(key=lambda x: (x[0], x[1], x[2]))
+            _, _, _, best_node = candidates[0]
+            visited.add(best_node)
+            path.append(best_node)
+            current = best_node
+            continue
+
+        # 2-hop local escape:
+        # if no 1-hop move is available, allow a move to an intermediate node
+        # provided that a lower-phi region can be reached within two hops
+        escape_candidates = []
+        for mid in neighbours:
+            if mid in visited:
+                continue
+
+            edge_data_1 = get_edge_data_any_direction(current, mid)
+            if edge_data_1 is None:
+                continue
+            c1 = heat_cost(edge_data_1, profile)
+
+            mid_neighbours = list(G.successors(mid)) + list(G.predecessors(mid))
+            mid_neighbours = list(dict.fromkeys(mid_neighbours))
+
+            best_second_phi = float("inf")
+            found_lower_second = False
+
+            for nb2 in mid_neighbours:
+                if nb2 == current or nb2 in visited:
+                    continue
+
+                phi_nb2 = distances.get(nb2, float("inf"))
+                if not np.isfinite(phi_nb2):
+                    continue
+
+                # Treat mid as a valid escape node if a strictly lower-phi
+                # node can be reached in two hops
+                if phi_nb2 < phi_here - 1e-9:
+                    best_second_phi = min(best_second_phi, phi_nb2)
+                    found_lower_second = True
+
+            if found_lower_second:
+                # Rank escape nodes by the best 2-hop phi, then by first-step cost
+                score = best_second_phi + mu * c1
+                phi_mid = distances.get(mid, float("inf"))
+                escape_candidates.append((score, best_second_phi, phi_mid, c1, mid))
+
+        if escape_candidates:
+            escape_candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+            _, _, _, _, best_mid = escape_candidates[0]
+            visited.add(best_mid)
+            path.append(best_mid)
+            current = best_mid
+            continue
+
+        print(f"  Soft recovery stuck at node {current} (phi={phi_here:.4f})")
+        break
 
     if current != origin_node:
-        print("  Falling back to Dijkstra on linear full cost...")
+        print("  Falling back to Dijkstra on exponential full cost...")
         try:
             route = nx.shortest_path(
                 G,
                 origin_node,
                 dest_node,
-                weight=lambda u, v, d: linear_cost(d, profile),
+                weight=lambda u, v, d: heat_cost(d, profile),
             )
-            print(f"  Gradient descent recovery + fallback ({time.time() - t0:.2f}s)")
+            print(f"  Soft gradient recovery + fallback ({time.time() - t0:.2f}s)")
             return route
         except (nx.NetworkXNoPath, nx.NodeNotFound):
-            print(f"  Gradient descent recovery failed ({time.time() - t0:.2f}s)")
+            print(f"  Soft gradient recovery failed ({time.time() - t0:.2f}s)")
             return []
 
     path.reverse()
-    print(f"  Gradient descent recovery ({time.time() - t0:.2f}s)")
+    print(f"  Soft gradient recovery ({time.time() - t0:.2f}s)")
     return path
 
 
@@ -541,7 +642,7 @@ def main():
     config_path = Path(args.config)
     base_dir = config_path.parent
     cfg = load_config(config_path)
-    profile = load_linear_profile(cfg)
+    profile = load_heat_profile(cfg)
 
     print("=" * 55)
     print("  Bristol Heat Method Router")
@@ -584,7 +685,8 @@ def main():
     print("\n[6/6] Heat method")
     distances = run_heat_method(G, start_node, profile, cfg)
     print(f"  Phi at destination: {distances.get(goal_node, float('inf')):.4f}")
-    route_c = recover_path(G, start_node, goal_node, distances, profile)
+    route_c = recover_path(G, start_node, goal_node, distances, profile, delta=0.05,
+    mu=0.15)
     if not route_c:
         print("  No heat route found; using shortest-path fallback for plotting")
         route_c = route_a
