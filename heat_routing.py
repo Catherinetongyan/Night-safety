@@ -51,6 +51,7 @@ def resolve_path(base_dir: Path, raw_path: str) -> Path:
 class HeatProfile:
     alpha: float
     beta: float
+    gamma_dark: float = 0.0
     require_lit: bool = False
     epsilon: float = 1.0e-6
 
@@ -58,13 +59,14 @@ class HeatProfile:
 def load_heat_profile(cfg: dict) -> HeatProfile:
     weights_cfg = cfg.get("weights", {})
     heat_cfg = cfg.get("heat_method", {})
+
     return HeatProfile(
         alpha=float(heat_cfg.get("alpha", weights_cfg.get("alpha", 1.3))),
         beta=float(heat_cfg.get("beta", weights_cfg.get("beta", 1.1))),
+        gamma_dark=float(heat_cfg.get("gamma_dark", 0.0)),
         require_lit=bool(heat_cfg.get("require_lit", False)),
         epsilon=float(heat_cfg.get("epsilon", 1.0e-6)),
     )
-
 
 # ────────────────────────────────────────────────────────────
 # 2. Routing attributes
@@ -126,15 +128,22 @@ def compute_full_astar_weights(G: nx.MultiDiGraph, cfg: dict) -> None:
 
 
 def heat_cost(edge_data: dict, profile: HeatProfile) -> float:
-    """Heat-method edge cost, aligned with A* full exponential cost."""
+    """
+    Heat-method edge cost with an additional dark-edge barrier.
+
+    Base cost:
+        length * exp(alpha * norm_crime - beta * norm_safety)
+    """
     if profile.require_lit and edge_data.get("light_count", 0) <= 0:
         return float("inf")
 
-    length = float(edge_data.get("length", 50.0))
+    length = float(edge_data.get("length", 1.0))
     nc = float(edge_data.get("norm_crime", 0.0))
     ns = float(edge_data.get("norm_safety", 0.0))
 
-    cost = length * np.exp(profile.alpha * nc - profile.beta * ns)
+    exponent = profile.alpha * nc - profile.beta * ns
+    cost = length * np.exp(exponent)
+
     return max(cost, profile.epsilon)
 
 
@@ -214,7 +223,7 @@ def run_heat_method(G: nx.MultiDiGraph, origin_node, profile: HeatProfile, cfg: 
     div_mod[src] = 0
     phi = spsolve(L_mod.tocsr(), div_mod)
     phi -= phi[src]
-    phi = np.abs(phi)
+    np.maximum(phi, 0.0)
     print(f"  Poisson solve ({time.time() - t0:.2f}s)")
 
     return {nodes[i]: phi[i] for i in range(n)}
@@ -420,12 +429,12 @@ def plot_routes(G, start_node, goal_node, route_a, route_b, route_c, cctv_gdf, l
 
     fig, axes = plt.subplots(1, 3, figsize=(24, 8))
     fig.patch.set_facecolor("#1a1a2e")
-    fig.subplots_adjust(left=0.07, right=0.98, bottom=0.10, top=0.90, wspace=0.05)
+    fig.subplots_adjust(left=0.07, right=0.98, bottom=0.12, top=0.84, wspace=0.08)
 
     titles = [
-        f"A  ·  Shortest path\n{dist_a:.0f}m  •  {format_time(mins_a)} walking",
-        f"B  ·  A* full\n{dist_b:.0f}m  •  {format_time(mins_b)} walking",
-        f"C  ·  Heat full\n{dist_c:.0f}m  •  {format_time(mins_c)} walking",
+        f"A: Shortest route\n{dist_a:.0f}m    {format_time(mins_a)} walking",
+        f"B: A* Safety-Optimised Route\n{dist_b:.0f}m    {format_time(mins_b)} walking",
+        f"C: Heat-Based Safety-Optimised Route\n{dist_c:.0f}m    {format_time(mins_c)} walking",
     ]
     routes = [route_a, route_b, route_c]
     colours = ["#FFFFFF", "#FFFFFF", "#FFFFFF"]
@@ -482,7 +491,7 @@ def plot_routes(G, start_node, goal_node, route_a, route_b, route_c, cctv_gdf, l
         margin = 0.003
         ax.set_xlim(min(xs) - margin, max(xs) + margin)
         ax.set_ylim(min(ys) - margin, max(ys) + margin)
-        ax.set_title(title, color="white", fontsize=13, fontweight="bold", pad=12)
+        ax.set_title(title, color="white", fontsize=11, fontweight="bold", pad=10, linespacing=1.15,)
         ax.set_axis_off()
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
@@ -497,7 +506,7 @@ def plot_routes(G, start_node, goal_node, route_a, route_b, route_c, cctv_gdf, l
         mpatches.Patch(color="#FFFFFF", label="Route"),
         plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="white", markersize=8, label="Start"),
         plt.Line2D([0], [0], marker="*", color="w", markerfacecolor="#aaaaaa", markersize=10, label="End"),
-        plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="#02CCFF7B", markersize=6, label="CCTV"),
+        plt.Line2D([0], [0], marker="s", color="w", markerfacecolor="#02CCFF7B", markersize=6, label="CCTV"),
         plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="#FFFB0078", markersize=6, label="Street light"),
         mpatches.Patch(color=cmap(0.1), label="Road: low risk"),
         mpatches.Patch(color=cmap(0.9), label="Road: high risk"),
@@ -517,15 +526,15 @@ def plot_routes(G, start_node, goal_node, route_a, route_b, route_c, cctv_gdf, l
     plt.suptitle(
         f"{start_name}  →  {end_name}",
         color="white",
-        fontsize=16,
+        fontsize=14,
         fontweight="bold",
-        y=0.97,
+        y=0.94,
     )
 
     print("\n========== ROUTE SUMMARY ==========")
-    print(f"  A  Shortest path: {dist_a:.0f}m  |  {format_time(mins_a)}")
-    print(f"  B  A* full:       {dist_b:.0f}m  |  {format_time(mins_b)}")
-    print(f"  C  Heat full:     {dist_c:.0f}m  |  {format_time(mins_c)}")
+    print(f"  A  Shortest route: {dist_a:.0f}m  |  {format_time(mins_a)}")
+    print(f"  B  A* Safety-Optimised Route:       {dist_b:.0f}m  |  {format_time(mins_b)}")
+    print(f"  C  Heat-Based Safety-Optimised Route:     {dist_c:.0f}m  |  {format_time(mins_c)}")
     print("===================================\n")
 
     sa = route_safety_stats(G, route_a)
@@ -534,7 +543,6 @@ def plot_routes(G, start_node, goal_node, route_a, route_b, route_c, cctv_gdf, l
     print_safety_analysis(sa, sb, sc)
 
     plt.show()
-
 
 # ────────────────────────────────────────────────────────────
 # 6. Entry point
@@ -592,11 +600,10 @@ def main():
     print("\n[6/6] Heat method")
     distances = run_heat_method(G, start_node, profile, cfg)
     print(f"  Phi at destination: {distances.get(goal_node, float('inf')):.4f}")
-    route_c = recover_path(G, start_node, goal_node, distances, profile, lambda_phi=5.0)
+    route_c = recover_path(G, start_node, goal_node, distances, profile, lambda_phi=10.0)
     if not route_c:
         print("  No heat route found; using shortest-path fallback for plotting")
         route_c = route_a
-
     print(f"\nPlotting... Total pipeline: {time.time() - t_total:.2f}s")
     plot_routes(G, start_node, goal_node, route_a, route_b, route_c, cctv_gdf, lights_gdf, cfg)
 
