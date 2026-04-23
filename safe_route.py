@@ -46,20 +46,28 @@ def compute_edge_costs(G: nx.MultiDiGraph, cfg: dict):
 
     w(e) = length(e) * exp( alpha * R̃(e) − beta * S̃(e) )
 
-    Route A — length only         (weight="length",       no change needed)
-    Route B — length + crime      (weight="crime_weight")
-    Route C — length + crime + safety infrastructure (weight="safety_weight")
+    Route A — length only                (weight="length",             no change needed)
+    Route B — length + crime             (weight="crime_weight")
+    Route C — length + safety            (weight="safety_only_weight")
+    Route D — length + crime + safety    (weight="safety_weight")
     """
-    alpha = cfg["weights"]["alpha"]
-    beta  = cfg["weights"]["beta"]
+    alpha   = cfg["weights"]["alpha"]
+    beta    = cfg["weights"]["beta"]
+    w_cctv  = cfg["weights"].get("cctv_weight", 3)
+    w_light = cfg["weights"].get("light_weight", 1)
 
     node_crime = nx.get_node_attributes(G, "crime_score")
 
     lengths, crime_scores, safety_scores = [], [], []
     for u, v, data in G.edges(data=True):
-        lengths.append(data.get("length", 1.0))
+        length = data.get("length", 1.0)
+        lengths.append(length)
         crime_scores.append((node_crime.get(u, 0) + node_crime.get(v, 0)) / 2.0)
-        safety_scores.append(data.get("safety_density", 0.0))
+
+        cc = data.get("cctv_count", 0)
+        lc = data.get("light_count", 0)
+        density = (cc * w_cctv + lc * w_light) / max(length, 1.0)
+        safety_scores.append(density)
 
     def normalise(vals):
         arr = np.array(vals)
@@ -74,8 +82,10 @@ def compute_edge_costs(G: nx.MultiDiGraph, cfg: dict):
     for (u, v, data), length, nc, ns in zip(
         G.edges(data=True), lengths, norm_crimes, norm_safeties
     ):
-        data["crime_weight"]  = length * np.exp(alpha * nc)
-        data["safety_weight"] = length * np.exp(alpha * nc - beta * ns)
+        data["crime_weight"]       = length * np.exp(alpha * nc)
+        beta_display = beta * 5.0 # Emphasise safety for display-only route C
+        data["safety_only_weight"] = length * np.exp(-beta_display * ns)
+        data["safety_weight"]      = length * np.exp(alpha * nc - beta * ns)
 
 
 # ────────────────────────────────────────────────────────────
@@ -83,7 +93,13 @@ def compute_edge_costs(G: nx.MultiDiGraph, cfg: dict):
 # ────────────────────────────────────────────────────────────
 
 def find_routes(G: nx.MultiDiGraph, cfg: dict):
-    """Return (start_node, goal_node, quickest, crime_route, safest)."""
+    """Return (start_node, goal_node, route_a, route_b, route_c, route_d).
+
+    A = distance only
+    B = distance + crime
+    C = distance + safety
+    D = distance + crime + safety
+    """
     route_cfg = cfg["route"]
     start_lat, start_lon = route_cfg["start"]["lat"], route_cfg["start"]["lon"]
     goal_lat,  goal_lon  = route_cfg["end"]["lat"],   route_cfg["end"]["lon"]
@@ -91,11 +107,12 @@ def find_routes(G: nx.MultiDiGraph, cfg: dict):
     start_node = ox.distance.nearest_nodes(G, start_lon, start_lat)
     goal_node  = ox.distance.nearest_nodes(G, goal_lon,  goal_lat)
 
-    quickest    = nx.shortest_path(G, start_node, goal_node, weight="length")
-    crime_route = nx.astar_path(G,   start_node, goal_node, weight="crime_weight")
-    safest      = nx.astar_path(G,   start_node, goal_node, weight="safety_weight")
+    route_a = nx.shortest_path(G, start_node, goal_node, weight="length")
+    route_b = nx.astar_path(G,   start_node, goal_node, weight="crime_weight")
+    route_c = nx.astar_path(G,   start_node, goal_node, weight="safety_only_weight")
+    route_d = nx.astar_path(G,   start_node, goal_node, weight="safety_weight")
 
-    return start_node, goal_node, quickest, crime_route, safest
+    return start_node, goal_node, route_a, route_b, route_c, route_d
 
 
 def route_stats(G: nx.MultiDiGraph, route: list, speed_kmh: float):
@@ -161,62 +178,84 @@ def route_safety_stats(G: nx.MultiDiGraph, route: list):
     }
  
  
-def print_safety_analysis(stats_a, stats_b, stats_c):
-    """Print a comparison table and improvement metrics."""
+def print_safety_analysis(stats_a, stats_b, stats_c, stats_d):
+    """Print a comparison table and improvement metrics.
+
+    A = distance only
+    B = distance + crime
+    C = distance + safety
+    D = distance + crime + safety (full)
+    """
     print("\n========== SAFETY ANALYSIS ==========")
-    print(f"{'Metric':<25} {'A (shortest)':>14} {'B (+crime)':>14} {'C (full)':>14}")
-    print("-" * 70)
-    print(f"{'Distance':<25} {stats_a['total_length']:>12.0f}m {stats_b['total_length']:>12.0f}m {stats_c['total_length']:>12.0f}m")
-    print(f"{'Lights per km':<25} {stats_a['light_density']:>13.1f} {stats_b['light_density']:>13.1f} {stats_c['light_density']:>13.1f}")
-    print(f"{'CCTV per km':<25} {stats_a['cctv_density']:>13.1f} {stats_b['cctv_density']:>13.1f} {stats_c['cctv_density']:>13.1f}")
-    print(f"{'Lit coverage':<25} {stats_a['lit_coverage']:>13.1%} {stats_b['lit_coverage']:>13.1%} {stats_c['lit_coverage']:>13.1%}")
-    print(f"{'Dark segments':<25} {stats_a['dark_length']:>12.0f}m {stats_b['dark_length']:>12.0f}m {stats_c['dark_length']:>12.0f}m")
-    print(f"{'Avg crime risk':<25} {stats_a['avg_crime_risk']:>13.3f} {stats_b['avg_crime_risk']:>13.3f} {stats_c['avg_crime_risk']:>13.3f}")
-    print(f"{'Max crime risk':<25} {stats_a['max_crime_risk']:>13.3f} {stats_b['max_crime_risk']:>13.3f} {stats_c['max_crime_risk']:>13.3f}")
- 
-    # C vs A improvements
+    header = (f"{'Metric':<25} {'A (shortest)':>14} {'B (+crime)':>14} "
+              f"{'C (+safety)':>14} {'D (full)':>14}")
+    print(header)
+    print("-" * 85)
+    print(f"{'Distance':<25} {stats_a['total_length']:>12.0f}m {stats_b['total_length']:>12.0f}m "
+          f"{stats_c['total_length']:>12.0f}m {stats_d['total_length']:>12.0f}m")
+    print(f"{'Lights per km':<25} {stats_a['light_density']:>13.1f} {stats_b['light_density']:>13.1f} "
+          f"{stats_c['light_density']:>13.1f} {stats_d['light_density']:>13.1f}")
+    print(f"{'CCTV per km':<25} {stats_a['cctv_density']:>13.1f} {stats_b['cctv_density']:>13.1f} "
+          f"{stats_c['cctv_density']:>13.1f} {stats_d['cctv_density']:>13.1f}")
+    print(f"{'Lit coverage':<25} {stats_a['lit_coverage']:>13.1%} {stats_b['lit_coverage']:>13.1%} "
+          f"{stats_c['lit_coverage']:>13.1%} {stats_d['lit_coverage']:>13.1%}")
+    print(f"{'Dark segments':<25} {stats_a['dark_length']:>12.0f}m {stats_b['dark_length']:>12.0f}m "
+          f"{stats_c['dark_length']:>12.0f}m {stats_d['dark_length']:>12.0f}m")
+    print(f"{'Avg crime risk':<25} {stats_a['avg_crime_risk']:>13.3f} {stats_b['avg_crime_risk']:>13.3f} "
+          f"{stats_c['avg_crime_risk']:>13.3f} {stats_d['avg_crime_risk']:>13.3f}")
+    print(f"{'Max crime risk':<25} {stats_a['max_crime_risk']:>13.3f} {stats_b['max_crime_risk']:>13.3f} "
+          f"{stats_c['max_crime_risk']:>13.3f} {stats_d['max_crime_risk']:>13.3f}")
+
     def pct_change(new, old):
         return (new - old) / max(abs(old), 1e-9) * 100
- 
-    light_d = pct_change(stats_c["light_density"], stats_a["light_density"])
-    cctv_d  = pct_change(stats_c["cctv_density"],  stats_a["cctv_density"])
-    lit_c   = pct_change(stats_c["lit_coverage"],   stats_a["lit_coverage"])
-    dark_r  = pct_change(stats_a["dark_length"],    stats_c["dark_length"])
-    crime_r = pct_change(stats_a["avg_crime_risk"], stats_c["avg_crime_risk"])
-    detour = (stats_c["total_length"] - stats_a["total_length"]) / stats_a["total_length"] * 100 if stats_a["total_length"] > 0 else 0
 
-    print(f"\n  Route C vs Route A:")
-    print(f"    Detour:            {detour:.1f}%")
-    print(f"    Lights per km:   {'+' if light_d >= 0 else ''}{light_d:.1f}%")
-    print(f"    CCTV per km:     {'+' if cctv_d >= 0 else ''}{cctv_d:.1f}%")
-    print(f"    Lit coverage:    {'+' if lit_c >= 0 else ''}{lit_c:.1f}%")
-    print(f"    Dark segments:   {'-' if dark_r > 0 else '+'}{abs(dark_r):.1f}%")
-    print(f"    Avg crime risk:  {'-' if crime_r > 0 else '+'}{abs(crime_r):.1f}%")
+    def print_comparison(label, stats_x):
+        detour  = pct_change(stats_x["total_length"],  stats_a["total_length"])
+        light_d = pct_change(stats_x["light_density"], stats_a["light_density"])
+        cctv_d  = pct_change(stats_x["cctv_density"],  stats_a["cctv_density"])
+        lit_c   = pct_change(stats_x["lit_coverage"],   stats_a["lit_coverage"])
+        dark_r  = pct_change(stats_x["dark_length"],    stats_a["dark_length"])
+        crime_r = pct_change(stats_x["avg_crime_risk"], stats_a["avg_crime_risk"])
+
+        print(f"\n  {label} vs Route A:")
+        print(f"    Detour:          {detour:+.1f}%")
+        print(f"    Lights per km:   {light_d:+.1f}%")
+        print(f"    CCTV per km:     {cctv_d:+.1f}%")
+        print(f"    Lit coverage:    {lit_c:+.1f}%")
+        print(f"    Dark segments:   {dark_r:+.1f}%")
+        print(f"    Avg crime risk:  {crime_r:+.1f}%")
+
+    print_comparison("Route B", stats_b)
+    print_comparison("Route C", stats_c)
+    print_comparison("Route D", stats_d)
     print("=====================================\n")
 
 # ────────────────────────────────────────────────────────────
 # 5. Visualisation
 # ────────────────────────────────────────────────────────────
 
-def plot_routes(G, start_node, goal_node, quickest, crime_route, safest,
+def plot_routes(G, start_node, goal_node, route_a, route_b, route_c, route_d,
                 cctv_gdf, lights_gdf, cfg):
     speed = cfg["route"]["walking_speed_kmh"]
 
-    quick_dist, quick_mins = route_stats(G, quickest,    speed)
-    crime_dist, crime_mins = route_stats(G, crime_route, speed)
-    safe_dist,  safe_mins  = route_stats(G, safest,      speed)
+    dist_a, mins_a = route_stats(G, route_a, speed)
+    dist_b, mins_b = route_stats(G, route_b, speed)
+    dist_c, mins_c = route_stats(G, route_c, speed)
+    dist_d, mins_d = route_stats(G, route_d, speed)
 
-    fig, axes = plt.subplots(1, 3, figsize=(27, 9))
+    fig, axes = plt.subplots(1, 4, figsize=(18, 16))
+    axes = axes.flatten()
     fig.patch.set_facecolor("#1a1a2e")
-    fig.subplots_adjust(left=0.07, right=0.98, bottom=0.10, top=0.90, wspace=0.05)
+    fig.subplots_adjust(left=0.07, right=0.98, bottom=0.08, top=0.90, wspace=0.05, hspace=0.12)
 
     titles = [
-        f"A  ·  Distance only\n{quick_dist:.0f}m  •  {format_time(quick_mins)} walking",
-        f"B  ·  Distance + Crime\n{crime_dist:.0f}m  •  {format_time(crime_mins)} walking",
-        f"C  ·  Distance + Crime + Safety\n{safe_dist:.0f}m  •  {format_time(safe_mins)} walking",
+        f"A: Shortest Route\n{dist_a:.0f}m  {format_time(mins_a)} walking",
+        f"B: Crime-Aware Route\n{dist_b:.0f}m  {format_time(mins_b)} walking",
+        f"C: Safety-Aware Route\n{dist_c:.0f}m  {format_time(mins_c)} walking",
+        f"D: A* Safety-Optimised Route\n{dist_d:.0f}m  {format_time(mins_d)} walking",
     ]
-    routes  = [quickest, crime_route, safest]
-    colours = ["#FFFFFF", "#FFFFFF", "#FFFFFF"]
+    routes  = [route_a, route_b, route_c, route_d]
+    colours = ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"]
 
     node_crime = nx.get_node_attributes(G, "crime_score")
     edge_crimes = [
@@ -246,7 +285,7 @@ def plot_routes(G, start_node, goal_node, quickest, crime_route, safest,
         ax.scatter(G.nodes[goal_node]["x"],  G.nodes[goal_node]["y"],
                    c=colour,  s=150, zorder=6, marker="*")
 
-        cctv_gdf.plot(ax=ax,   color="#02CCFF7B", markersize=6, zorder=5, alpha=0.9,marker="s")
+        cctv_gdf.plot(ax=ax,   color="#02CCFF7B", markersize=6, zorder=5, alpha=0.9, marker="s")
         lights_gdf.plot(ax=ax, color="#FFFB0078", markersize=1.5, zorder=4, alpha=0.3)
 
         xs = [G.nodes[n]["x"] for n in route]
@@ -257,7 +296,7 @@ def plot_routes(G, start_node, goal_node, quickest, crime_route, safest,
         ax.set_title(title, color="white", fontsize=13, fontweight="bold", pad=12)
         ax.set_axis_off()
 
-    # Colorbar: independent axis on the far left, no space stolen from subplots
+    # Colorbar
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar_ax = fig.add_axes([0.015, 0.15, 0.012, 0.55])
@@ -268,15 +307,15 @@ def plot_routes(G, start_node, goal_node, quickest, crime_route, safest,
 
     legend_handles = [
         mpatches.Patch(color="#FFFFFF", label="Route"),
-        plt.Line2D([0],[0], marker="o", color="w", markerfacecolor="white",   markersize=8,  label="Start"),
-        plt.Line2D([0],[0], marker="*", color="w", markerfacecolor="#aaaaaa", markersize=10, label="End"),
-        plt.Line2D([0],[0], marker="o", color="w", markerfacecolor="#02CCFF7B",     markersize=6,  label="CCTV"),
+        plt.Line2D([0],[0], marker="o", color="w", markerfacecolor="white",      markersize=8,  label="Start"),
+        plt.Line2D([0],[0], marker="*", color="w", markerfacecolor="#aaaaaa",    markersize=10, label="End"),
+        plt.Line2D([0],[0], marker="s", color="w", markerfacecolor="#02CCFF7B",  markersize=6,  label="CCTV"),
         plt.Line2D([0],[0], marker="o", color="w", markerfacecolor="#FFFB0078",  markersize=6,  label="Street light"),
         mpatches.Patch(color=cmap(0.1), label="Road: low risk"),
         mpatches.Patch(color=cmap(0.9), label="Road: high risk"),
     ]
     fig.legend(
-        handles=legend_handles, loc = "lower center", ncol=7,
+        handles=legend_handles, loc="lower center", ncol=7,
         facecolor="#1a1a2e", labelcolor="white", fontsize=10, framealpha=0.8,
     )
 
@@ -288,22 +327,24 @@ def plot_routes(G, start_node, goal_node, quickest, crime_route, safest,
     )
 
     print("\n========== ROUTE SUMMARY ==========")
-    print(f"  A  Distance only:             {quick_dist:.0f}m  |  {format_time(quick_mins)}")
-    print(f"  B  Distance + Crime:          {crime_dist:.0f}m  |  {format_time(crime_mins)}")
-    print(f"  C  Distance + Crime + Safety: {safe_dist:.0f}m  |  {format_time(safe_mins)}")
+    print(f"  A Shortest Route:             {dist_a:.0f}m  |  {format_time(mins_a)}")
+    print(f"  B Crime-Aware Route:          {dist_b:.0f}m  |  {format_time(mins_b)}")
+    print(f"  C Safety-Aware Route:         {dist_c:.0f}m  |  {format_time(mins_c)}")
+    print(f"  D A* Safety-Optimised Route:  {dist_d:.0f}m  |  {format_time(mins_d)}")
     print("====================================\n")
 
     # Safety analysis
-    stats_a = route_safety_stats(G, quickest)
-    stats_b = route_safety_stats(G, crime_route)
-    stats_c = route_safety_stats(G, safest)
-    print_safety_analysis(stats_a, stats_b, stats_c)
+    sa = route_safety_stats(G, route_a)
+    sb = route_safety_stats(G, route_b)
+    sc = route_safety_stats(G, route_c)
+    sd = route_safety_stats(G, route_d)
+    print_safety_analysis(sa, sb, sc, sd)
 
     plt.show()
 
 
 # ────────────────────────────────────────────────────────────
-# 5. Entry point
+# 6. Entry point
 # ────────────────────────────────────────────────────────────
 
 def main():
@@ -332,11 +373,13 @@ def main():
     compute_edge_costs(G, cfg)
 
     print("\nFinding routes...")
-    start_node, goal_node, quickest, crime_route, safest = find_routes(G, cfg)
+    start_node, goal_node, route_a, route_b, route_c, route_d = find_routes(G, cfg)
+
+    plot_routes(G, start_node, goal_node, route_a, route_b, route_c, route_d,
+                cctv_gdf, lights_gdf, cfg)
+
     elapsed = time.time() - t_start
     print(f"Total runtime: {elapsed:.1f}s")
 
-    plot_routes(G, start_node, goal_node, quickest, crime_route, safest, cctv_gdf, lights_gdf, cfg)
-    
 if __name__ == "__main__":
     main()
